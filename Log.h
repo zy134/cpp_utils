@@ -12,8 +12,6 @@ class LogServer;
 
 class LogBuffer;
 
-} // namespace detail
-
 enum class LogLevel {
     Version,
     Debug,
@@ -34,5 +32,7 @@ public:
 private:
     std::shared_ptr<detail::LogServer> mpLogServer;
 };
+
+} // namespace detail
 
 } // namespace utils
