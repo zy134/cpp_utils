@@ -2,25 +2,29 @@
 #include "format.h"
 #include "utils.h"
 #include <chrono>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
+#include <bits/types/struct_timeval.h>
 #include <memory>
-#include <ratio>
+#include <sched.h>
 #include <string>
 #include <string_view>
+#include <sstream>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
 #include <array>
 #include <exception>
 #include <future>
-#include <tuple>
-#include <unistd.h>
-#include <fcntl.h>
 #include <chrono>
 #include <vector>
-
+extern "C" {
+#include <unistd.h>
+#include <sys/time.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+#include <time.h>
+}
 #define THROW_SYS_ERR(msg) throw std::system_error { errno, std::system_category(), msg };
 #define THROW_RUNTIME_ERR(msg) throw std::runtime_error { msg };
 #define THROW_NET_ERR(errNum, msg) throw std::runtime_error { std::string(msg) + gai_strerror(errNum) };
@@ -50,6 +54,7 @@ public:
     }
 
     void write(const char* srcData, size_t size) {
+        std::cout << "start write size:" << size << std::endl;
         if (!writable(size))
             THROW_RUNTIME_ERR("Write failed because data is too big");
         ::memcpy(mRawBuffer.data() + mUsedSize, srcData, size);
@@ -62,6 +67,7 @@ public:
     }
 
     void flush(int fd) {
+        std::cout << "start flush" << std::endl;
         ::write(fd, mRawBuffer.data(), mUsedSize);
         mUsedSize = 0;
     }
@@ -79,7 +85,7 @@ public:
     LogServer(std::string_view filePath);
     ~LogServer();
 
-    void write(std::string_view fmt);
+    void write(const std::string& fmt);
 private:
 
     int                     mLogFd;
@@ -96,7 +102,7 @@ private:
 };
 
 LogServer::LogServer(std::string_view filePath) {
-    mLogFd = ::open(filePath.data(), O_CREAT | O_RDWR, 0666);
+    mLogFd = ::open(filePath.data(), O_CREAT | O_RDWR | O_TRUNC, 0666);
     if (mLogFd < 0) {
         std::string errMsg = "Can't open path:";
         errMsg.append(filePath);
@@ -104,14 +110,19 @@ LogServer::LogServer(std::string_view filePath) {
     }
     mStopThread = false;
     mpCurrentBuffer = std::make_unique<LogBuffer>();
-    mFlushThread = std::thread([&] {
+    mFlushThread = std::thread([this] {
         std::vector<std::unique_ptr<LogBuffer>> needFlushBuffers;
         while (!mStopThread) {
             // Get pending buffers.
             {
                 std::unique_lock lock { mMutex };
-                auto res = mCond.wait_for(lock, milliseconds(1000));
-                if (res == std::cv_status::timeout && mpCurrentBuffer->flushEnable()) {
+                auto hasPendingBuf = mCond.wait_for(lock, 1000ms, [&] {
+                    return mStopThread || !mvPendingBuffers.empty();
+                });
+                if (mStopThread) {
+                    return ;
+                }
+                if (!hasPendingBuf) {
                     mvPendingBuffers.emplace_back(std::move(mpCurrentBuffer));
                     if (mvAvailbleBuffers.empty()) {
                         mpCurrentBuffer = std::make_unique<LogBuffer>();
@@ -127,8 +138,9 @@ LogServer::LogServer(std::string_view filePath) {
                 buffer->flush(mLogFd);
             }
             // Return availble buffers.
+            std::cout << __FUNCTION__ << ": Return buffers" << std::endl;
             {
-                std::unique_lock lock { mMutex };
+                // std::lock_guard lock { mMutex };
                 for (auto& buffer: needFlushBuffers) {
                     mvAvailbleBuffers.emplace_back(std::move(buffer));
                 }
@@ -139,7 +151,6 @@ LogServer::LogServer(std::string_view filePath) {
 }
 
 LogServer::~LogServer() {
-    std::lock_guard lock { mMutex };
     mStopThread = true;
     mCond.notify_one();
     if (mFlushThread.joinable())
@@ -166,7 +177,7 @@ auto LogServer::getInstance() -> std::shared_ptr<LogServer> {
     return instance;
 }
 
-void LogServer::write(std::string_view fmt) {
+void LogServer::write(const std::string& fmt) {
     std::lock_guard lock { mMutex };
     if (mpCurrentBuffer->writable(fmt.size())) {
         mpCurrentBuffer->write(fmt.data(), fmt.size());
@@ -182,7 +193,7 @@ void LogServer::write(std::string_view fmt) {
         }
         mpCurrentBuffer->write(fmt.data(), fmt.size());
         // Notify backend server to flush pending buffers.
-        mCond.notify_all();
+        mCond.notify_one();
     }
 }
 
@@ -190,9 +201,67 @@ void LogServer::write(std::string_view fmt) {
 
 namespace utils {
 
-void write_log_line(std::string_view fmt) {
-    static auto gLogServer = detail::LogServer::getInstance();
-    gLogServer->write(fmt);
+constexpr auto log_level_to_string(LogLevel level) {
+    switch (level) {
+        case LogLevel::Version:
+            return "Ver  ";
+        case LogLevel::Debug:
+            return "Debug";
+        case LogLevel::Info:
+            return "Info ";
+        case LogLevel::Warning:
+            return "Warn ";
+        case LogLevel::Error:
+            return "Error";
+        default:
+            return " ";
+    }
+}
+
+constexpr size_t LOG_MAX_LINE_SIZE = 256;
+constexpr size_t LOG_MAX_FILE_SIZE = 1024 * 1024 * 1024;  // 1GB
+
+void format_log_line(LogLevel level, const std::string& fmt) {
+    // Every thread can hold a reference to LogServer
+    thread_local static auto gLogServer = detail::LogServer::getInstance();
+    thread_local pid_t pid = getpid();
+    thread_local pid_t tid = gettid();
+#if 0
+// It's too complexed, so I deprecated it...
+//#if __cplusplus >= 201907L
+    const std::chrono::zoned_time cur_time{ std::chrono::current_zone(), std::chrono::system_clock::now() };
+    std::stringstream ss {};
+    ss << cur_time << " " << log_level_to_string(level) << " "
+        << getpid() << " " << gettid() << " " << fmt << "\n\0";
+    gLogServer->write(ss.str());
+#else
+    std::array<char, LOG_MAX_LINE_SIZE> buffer = {};
+    time_t t = time(nullptr);
+    struct tm now = {};
+    // Get local time, it's not a system call.
+    auto res = localtime_r(&t, &now);
+    if (res == nullptr)
+        THROW_SYS_ERR("Can't get current time.");
+
+    // Get milliseconds suffix
+    timeval tv = {};
+    gettimeofday(&tv, nullptr);
+
+    // Format log line.
+    snprintf(buffer.data(), buffer.size(), "%04d-%02d-%02d %02d.%02d.%02d.%03d %5d %5d [%s] %s\n"
+            , now.tm_year + 1900, now.tm_mon + 1, now.tm_mday
+            , now.tm_hour, now.tm_min, now.tm_sec
+            , static_cast<int>(tv.tv_usec)
+            , pid, tid
+            , log_level_to_string(level)
+            , fmt.c_str());
+
+    gLogServer->write(buffer.data());
+#endif
+}
+
+void printf_log_line(LogLevel level, const char *format, ...) {
+    THROW_RUNTIME_ERR("Not support for printf_log_line now!");
 }
 
 } // namespace utils

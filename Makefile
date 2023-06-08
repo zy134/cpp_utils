@@ -11,14 +11,14 @@ endif
 OBJS := LogImpl.o
 SRC_FILES := LogImpl.cpp
 
-all: $(OBJS)
+all: $(SRC_FILES)
 	$(CC) $(CC_FLAGS) $(LINK_FLAGS) $(SRC_FILES) -c -o $(BUILD_DIR)/$(OBJS)
 
 # For test
 TEST_OBJS := test
 TSET_SRC_FILES := test.cpp
 
-test: $(BUILD_DIR)/$(OBJS)
-
-$(TEST_OBJS): $(TSET_SRC_FILES)
+$(TEST_OBJS): $(TSET_SRC_FILES) $(SRC_FILES)
 	$(CC) $(CC_FLAGS) $(LINK_FLAGS) $(TSET_SRC_FILES) $(BUILD_DIR)/$(OBJS) -o $(BUILD_DIR)/$(TEST_OBJS)
+
+test: $(TSET_OBJS)

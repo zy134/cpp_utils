@@ -1,12 +1,10 @@
 #pragma once
 
 #include <memory>
-#include <string_view>
+#include <string>
 #include "utils.h"
 
 namespace utils {
-
-void write_log_line(std::string_view fmt);
 
 namespace detail {
 class LogBuffer;
@@ -21,5 +19,8 @@ enum class LogLevel {
     Error,
 };
 
+// Offer two different type of string input, C type printf and C++ type fotmat.
+void format_log_line(LogLevel level, const std::string&);
+void printf_log_line(LogLevel level, const char *format, ...);
 
-} // namespace utils
+}// namespace utils
