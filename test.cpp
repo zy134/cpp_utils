@@ -1,5 +1,7 @@
 #include "utils.h"
 #include "format.h"
+#include "Log.h"
+#include <string_view>
 
 int main() {
     auto str1 = utils::format("Hello");
@@ -10,5 +12,13 @@ int main() {
     std::cout << str2 << std::endl;
     std::cout << str3 << std::endl;
     std::cout << str4 << std::endl;
+
+    std::string_view line = "hello world\n";
+    utils::write_log_line(line);
+    utils::write_log_line(line);
+    utils::write_log_line(line);
+    utils::write_log_line(line);
+    utils::write_log_line(line);
+    utils::write_log_line(line);
     return 0;
 }

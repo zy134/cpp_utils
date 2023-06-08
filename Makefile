@@ -1,15 +1,24 @@
-BUILD := build
-CC := g++-10
-CC_FLAGS := -std=c++20 -Wall -Werror
+BUILD_DIR := build
+CC 			:= g++
+LINK_FLAGS 	:= -pthread
+CC_FLAGS 	:= -std=c++20 -Wall -Werror
 
-OBJS := test
-SRC_FILES := test.cpp
-
-ifneq ($(BUILD), $(wildcard $(BUILD)))
-    $(shell mkdir $(BUILD))
+ifneq ($(BUILD_DIR), $(wildcard $(BUILD_DIR)))
+    $(shell mkdir $(BUILD_DIR))
 endif
 
-all: $(OBJS)
+# cpp utils binary
+OBJS := LogImpl.o
+SRC_FILES := LogImpl.cpp
 
-$(OBJS): $(SRC_FILES)
-	$(CC) $(CC_FLAGS) $(SRC_FILES) -o $(BUILD)/$(OBJS)
+all: $(OBJS)
+	$(CC) $(CC_FLAGS) $(LINK_FLAGS) $(SRC_FILES) -c -o $(BUILD_DIR)/$(OBJS)
+
+# For test
+TEST_OBJS := test
+TSET_SRC_FILES := test.cpp
+
+test: $(BUILD_DIR)/$(OBJS)
+
+$(TEST_OBJS): $(TSET_SRC_FILES)
+	$(CC) $(CC_FLAGS) $(LINK_FLAGS) $(TSET_SRC_FILES) $(BUILD_DIR)/$(OBJS) -o $(BUILD_DIR)/$(TEST_OBJS)

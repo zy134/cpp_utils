@@ -6,11 +6,12 @@
 
 namespace utils {
 
+void write_log_line(std::string_view fmt);
+
 namespace detail {
-
-class LogServer;
-
 class LogBuffer;
+class LogServer;
+} // namespace detail
 
 enum class LogLevel {
     Version,
@@ -20,19 +21,5 @@ enum class LogLevel {
     Error,
 };
 
-class LogClient {
-public:
-    DISABLE_COPY(LogClient);
-    DISABLE_MOVE(LogClient);
-
-    LogClient();
-    ~LogClient();
-    void write(std::string fmt, LogLevel level);
-
-private:
-    std::shared_ptr<detail::LogServer> mpLogServer;
-};
-
-} // namespace detail
 
 } // namespace utils
