@@ -3,12 +3,8 @@
 #include "utils.h"
 
 #include <algorithm>
-#include <asm-generic/errno-base.h>
-#include <bits/types/struct_tm.h>
-#include <cstdint>
+#include <ios>
 #include <memory>
-#include <sched.h>
-#include <string>
 #include <string_view>
 #include <sstream>
 #include <thread>
@@ -19,17 +15,23 @@
 #include <future>
 #include <chrono>
 #include <vector>
+#include <fstream>
+#include <filesystem>
 
 extern "C" {
-#include <unistd.h>
-#include <sys/time.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
 #include <time.h>
+
+#if defined (__linux__) || defined (__unix__) || defined (__ANDROID__)
+    #include <unistd.h>
+#elif defined (__WIN32) || defined(__WIN64) || defined(WIN32)
+    #include <windows.h>
+#else
+    #error "Not support platform!"
+#endif
+
 }
 
 #define THROW_SYS_ERR(msg) throw std::system_error { errno, std::system_category(), msg };
@@ -43,6 +45,7 @@ constexpr size_t LOG_BUFFER_SIZE = 4096;
 using namespace std::chrono;
 using namespace std::chrono_literals;
 
+// LogBuffer is a simple memory buffer wrapper.
 class LogBuffer {
     DISABLE_COPY(LogBuffer);
     DISABLE_MOVE(LogBuffer);
@@ -72,9 +75,9 @@ public:
         return mUsedSize > 0;
     }
 
-    void flush(int fd) {
-        std::cout << "start flush" << std::endl;
-        ::write(fd, mRawBuffer.data(), mUsedSize);
+    void flush(std::fstream &fileStream) {
+        fileStream.write(mRawBuffer.data(), mUsedSize);
+        fileStream.flush();
         mUsedSize = 0;
     }
 
@@ -88,19 +91,25 @@ private:
     size_t                              mUsedSize;
 };
 
+// LogServer is the backend server, which manage multiple memory buffers and
+// flush these buffers to Log file asynchronously in appropriate time.
 class LogServer {
     DISABLE_COPY(LogServer);
     DISABLE_MOVE(LogServer);
 public:
-    static std::shared_ptr<LogServer> getInstance();
+    static auto getInstance() -> std::shared_ptr<LogServer>;
     LogServer();
     ~LogServer();
 
+    // Client would call this funtion to format log line and write it to LogBuffer.
     void write(LogLevel level, std::string_view fmt);
 private:
-    int createLogFile();
+    auto createLogFileStream() -> std::fstream;
 
-    int                     mLogFd;
+    // Default interval time which LogServer would flush all current buffer to log file.
+    static constexpr auto DEFAULT_FLUSH_INTERVAL = 2000ms;
+
+    std::fstream            mLogFileStream;
     uint32_t                mLogAlreadyWritenBytes;
 
     std::mutex              mMutex;
@@ -117,7 +126,7 @@ private:
 
 LogServer::LogServer() {
     // Create log file.
-    mLogFd = createLogFile();
+    mLogFileStream = createLogFileStream();
     mLogAlreadyWritenBytes = 0;
 
     // Create LogServer thread.
@@ -129,7 +138,7 @@ LogServer::LogServer() {
             // Get pending buffers.
             {
                 std::unique_lock lock { mMutex };
-                auto hasPendingBuf = mCond.wait_for(lock, 1000ms, [&] {
+                auto hasPendingBuf = mCond.wait_for(lock, DEFAULT_FLUSH_INTERVAL, [&] {
                     return mStopThread || !mvPendingBuffers.empty();
                 });
                 if (mStopThread) {
@@ -150,11 +159,13 @@ LogServer::LogServer() {
             for (auto& buffer: needFlushBuffers) {
                 if (buffer->size() + mLogAlreadyWritenBytes >= LOG_MAX_FILE_SIZE) {
                     std::cout << __FUNCTION__ << ": Log file is full, create new log file." << std::endl;
-                    mLogFd = createLogFile();
+                    mLogFileStream.flush();
+                    mLogFileStream.close();
+                    mLogFileStream = createLogFileStream();
                     mLogAlreadyWritenBytes = 0;
                 }
                 mLogAlreadyWritenBytes += buffer->size();
-                buffer->flush(mLogFd);
+                buffer->flush(mLogFileStream);
             }
             // Return availble buffers.
             std::cout << __FUNCTION__ << ": Return buffers" << std::endl;
@@ -176,11 +187,12 @@ LogServer::~LogServer() {
         mFlushThread.join();
     // Flush reserve buffers.
     for (auto& buffer: mvPendingBuffers) {
-        buffer->flush(mLogFd);
+        buffer->flush(mLogFileStream);
     }
     if (mpCurrentBuffer->flushEnable())
-        mpCurrentBuffer->flush(mLogFd);
-    close(mLogFd);
+        mpCurrentBuffer->flush(mLogFileStream);
+    mLogFileStream.flush();
+    mLogFileStream.close();
 }
 
 auto LogServer::getInstance() -> std::shared_ptr<LogServer> {
@@ -197,8 +209,15 @@ auto LogServer::getInstance() -> std::shared_ptr<LogServer> {
 }
 
 void LogServer::write(LogLevel level, std::string_view fmt) {
-    thread_local pid_t pid = getpid();
-    thread_local pid_t tid = gettid();
+#if defined (__linux__) || defined (__unix__) || defined (__ANDROID__)
+    thread_local int pid = getpid();
+    thread_local int tid = gettid();
+#elif defined (__WIN32) || defined(__WIN64) || defined(WIN32)
+    thread_local int pid = GetCurrentProcessId();
+    thread_local int tid = GetCurrentThreadId();
+#else
+    #error "Not support platform!"
+#endif
     constexpr auto log_level_to_string= [] (LogLevel level) {
         switch (level) {
             case LogLevel::Version:
@@ -228,14 +247,14 @@ void LogServer::write(LogLevel level, std::string_view fmt) {
         THROW_SYS_ERR("Can't get current time.");
 
     // Get milliseconds suffix
-    timeval tv = {};
-    gettimeofday(&tv, nullptr);
+    auto timeSinceEpoch = std::chrono::system_clock::now().time_since_epoch().count();
+    auto milliSeconds = static_cast<int>(timeSinceEpoch % (1000 * 1000 * 1000)) / 1000;
 
     // Format log line.
-    int logLineLength = snprintf(logLine.data(), logLine.size(), "%04d-%02d-%02d %02d.%02d.%02d.%03d %5d %5d [%s] %s\n"
+    int logLineLength = snprintf(logLine.data(), logLine.size(), "%04d-%02d-%02d %02d.%02d.%02d.%06d %5d %5d [%s] %s\n"
             , now.tm_year + 1900, now.tm_mon + 1, now.tm_mday
             , now.tm_hour, now.tm_min, now.tm_sec
-            , static_cast<int>(tv.tv_usec)
+            , milliSeconds
             , pid, tid
             , log_level_to_string(level)
             , fmt.data());
@@ -262,41 +281,37 @@ void LogServer::write(LogLevel level, std::string_view fmt) {
     }
 }
 
-// Thread safety function, unlock.
-int LogServer::createLogFile() {
-    int fd = -1;
-    // Create log path. If log path is already exist, ignore errno.
-    // Don't use "check and make", just call mkdir directly to avoid race condition.
-    auto res = mkdir(DEFAULT_PATH.data(), 0777);
-    if (res != 0 && errno != EEXIST) {
-        std::string errMsg = "Can't create path:";
-        errMsg.append(DEFAULT_PATH);
-        THROW_SYS_ERR(errMsg);
+std::fstream LogServer::createLogFileStream() {
+    // Create log path and change its permissions to 0777.
+    try {
+        // create_directory() return false because the directory is existed, ignored it.
+        // We just focus on the case which create_directory() or permissions() throw a exception
+        std::filesystem::create_directory(DEFAULT_LOG_PATH);
+        std::filesystem::permissions(DEFAULT_LOG_PATH, std::filesystem::perms::all);
+    } catch (...) {
+        THROW_SYS_ERR("Can't create log filePath because:");
     }
 
-    // Create log file.
+    // Format the name of log file.
     std::array<char, 128> filePath = {};
     time_t t = time(nullptr);
     struct tm now = {};
     if (localtime_r(&t, &now) == nullptr)
         THROW_SYS_ERR("Can't get current time.");
     snprintf(filePath.data(), filePath.size(), "%s/%04d-%02d-%02d_%02d-%02d-%02d.log"
-            , DEFAULT_PATH.data()
+            , DEFAULT_LOG_PATH
             , now.tm_year + 1900, now.tm_mon + 1, now.tm_mday
             , now.tm_hour, now.tm_min, now.tm_sec
     );
-    fd = ::open(filePath.data(), O_CREAT | O_RDWR | O_TRUNC, 0666);
-    if (fd < 0) {
-        std::string errMsg = "Can't create log file:";
-        errMsg.append(filePath.data());
-        THROW_SYS_ERR(errMsg);
+
+    // Create log file.
+    try {
+        auto fileStream = std::fstream(filePath.data(), std::ios::in | std::ios::out | std::ios::trunc);
+        return fileStream;
+    } catch (...) {
+        THROW_SYS_ERR("Can't create log file because:");
     }
-    return fd;
 }
-
-} // namespace utils::detail
-
-namespace utils {
 
 void format_log_line(LogLevel level, std::string_view fmt) {
     // Every thread can hold a reference to LogServer
@@ -308,4 +323,4 @@ void printf_log_line(LogLevel level, const char *format, ...) {
     THROW_RUNTIME_ERR("Not support for printf_log_line now!");
 }
 
-} // namespace utils
+} // namespace utils::detail
