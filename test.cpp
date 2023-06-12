@@ -18,9 +18,10 @@ int main() {
                 std::stringstream stream = {};
                 stream << "Thread:" << std::this_thread::get_id()
                        << " ,timestamp:" << std::chrono::system_clock::now().time_since_epoch().count();
-                LOG_DEBUG(stream.str());
-                LOG_INFO(stream.str());
-                LOG_WARN(stream.str());
+                auto str = stream.str();
+                LOG_DEBUG(str);
+                LOG_INFO(str);
+                LOG_WARN(str);
             }
         });
         threadVec.emplace_back(std::move(th));

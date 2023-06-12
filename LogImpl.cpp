@@ -321,8 +321,4 @@ void format_log_line(LogLevel level, std::string_view fmt) {
     gLogServer->write(level, fmt);
 }
 
-void printf_log_line(LogLevel level, const char *format, ...) {
-    THROW_RUNTIME_ERR("Not support for printf_log_line now!");
-}
-
 } // namespace utils::detail

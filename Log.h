@@ -1,8 +1,11 @@
 #pragma once
+#if defined (__clang__)
+#pragma clang diagnostic ignored "-Wformat-security"
+#endif
 
-#include <memory>
-#include <string>
-#include "utils.h"
+#include <array>
+#include <cstdarg>
+#include <string_view>
 
 namespace utils {
 
@@ -19,9 +22,7 @@ namespace detail {
 class LogBuffer;
 class LogServer;
 
-// Offer two different type of string input, C type printf and C++ type fotmat.
 void format_log_line(LogLevel level, std::string_view);
-void printf_log_line(LogLevel level, const char *format, ...);
 
 constexpr int TransLogLevelToInt(LogLevel level) {
     return static_cast<int>(level);
@@ -47,29 +48,60 @@ constexpr int TransLogLevelToInt(LogLevel level) {
 #define DEFAULT_LOG_LEVEL 2
 #endif
 
-#define LOG_VER(fmt)                                                            \
+#define LOG_VER(fmt, ...)                                                       \
     if constexpr (static_cast<int>(LogLevel::Version) >= DEFAULT_LOG_LEVEL) {   \
-        detail::format_log_line(LogLevel::Version, fmt);                        \
+        do {                                                                    \
+            std::string_view tmpLogFmt = fmt;                                   \
+            std::array<char, LOG_MAX_LINE_SIZE> tmpLogLineBuf;                  \
+            snprintf(tmpLogLineBuf.data(), tmpLogLineBuf.size()                 \
+                    , tmpLogFmt.data(), ##__VA_ARGS__);                         \
+            detail::format_log_line(LogLevel::Version, tmpLogLineBuf.data());   \
+        } while(0);                                                             \
     }
 
-#define LOG_DEBUG(fmt)                                                      \
-    if constexpr (static_cast<int>(LogLevel::Debug) >= DEFAULT_LOG_LEVEL) { \
-        detail::format_log_line(LogLevel::Debug, fmt);                      \
+#define LOG_DEBUG(fmt, ...)                                                     \
+    if constexpr (static_cast<int>(LogLevel::Debug) >= DEFAULT_LOG_LEVEL) {     \
+        do {                                                                    \
+            std::string_view tmpLogFmt = fmt;                                   \
+            std::array<char, LOG_MAX_LINE_SIZE> tmpLogLineBuf;                  \
+            snprintf(tmpLogLineBuf.data(), tmpLogLineBuf.size()                 \
+                    , tmpLogFmt.data(), ##__VA_ARGS__);                         \
+            detail::format_log_line(LogLevel::Debug, tmpLogLineBuf.data());     \
+        } while(0);                                                             \
     }
 
-#define LOG_INFO(fmt)                                                       \
-    if constexpr (static_cast<int>(LogLevel::Info) >= DEFAULT_LOG_LEVEL) {  \
-        detail::format_log_line(LogLevel::Info, fmt);                       \
+#define LOG_INFO(fmt, ...)                                                      \
+    if constexpr (static_cast<int>(LogLevel::Info) >= DEFAULT_LOG_LEVEL) {      \
+        do {                                                                    \
+            std::string_view tmpLogFmt = fmt;                                   \
+            std::array<char, LOG_MAX_LINE_SIZE> tmpLogLineBuf;                  \
+            snprintf(tmpLogLineBuf.data(), tmpLogLineBuf.size()                 \
+                    , tmpLogFmt.data(), ##__VA_ARGS__);                         \
+            detail::format_log_line(LogLevel::Info, tmpLogLineBuf.data());      \
+        } while(0);                                                             \
     }
 
-#define LOG_WARN(fmt)                                                           \
+
+#define LOG_WARN(fmt, ...)                                                      \
     if constexpr (static_cast<int>(LogLevel::Warning) >= DEFAULT_LOG_LEVEL) {   \
-        detail::format_log_line(LogLevel::Warning, fmt);                        \
+        do {                                                                    \
+            std::string_view tmpLogFmt = fmt;                                   \
+            std::array<char, LOG_MAX_LINE_SIZE> tmpLogLineBuf;                  \
+            snprintf(tmpLogLineBuf.data(), tmpLogLineBuf.size()                 \
+                    , tmpLogFmt.data(), ##__VA_ARGS__);                         \
+            detail::format_log_line(LogLevel::Warning, tmpLogLineBuf.data());   \
+        } while(0);                                                             \
     }
 
-#define LOG_ERR(fmt)                                                            \
+#define LOG_ERR(fmt, ...)                                                       \
     if constexpr (static_cast<int>(LogLevel::Error) >= DEFAULT_LOG_LEVEL) {     \
-        detail::format_log_line(LogLevel::Error, fmt);                          \
+        do {                                                                    \
+            std::string_view tmpLogFmt = fmt;                                   \
+            std::array<char, LOG_MAX_LINE_SIZE> tmpLogLineBuf;                  \
+            snprintf(tmpLogLineBuf.data(), tmpLogLineBuf.size()                 \
+                    , tmpLogFmt.data(), ##__VA_ARGS__);                         \
+            detail::format_log_line(LogLevel::Error, tmpLogLineBuf.data());     \
+        } while(0);                                                             \
     }
 
 }// namespace utils
