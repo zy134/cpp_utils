@@ -1,5 +1,3 @@
-#include "utils.h"
-#include "Log.h"
 #include "Backtrace.h"
 #include <cstdlib>
 #include <vector>
@@ -16,20 +14,20 @@ extern "C" {
 
 namespace utils {
 
-std::vector<std::string> GetBacktrace() {
+std::vector<std::string> getBacktrace() {
     std::vector<std::string> result;
 
     std::array<void *, MAX_BACKTRACE_DEPTH> backtraceBuffer;
 
     auto backtraceSize = ::backtrace(backtraceBuffer.data(), backtraceBuffer.size());
     if (backtraceSize < 0) {
-        LOG_ERR("Can't get backtrace because %d!", backtraceSize);
+        printf("Can't get backtrace because %d!", backtraceSize);
         return result;
     }
 
-    auto backtraceStrings = ::backtrace_symbols(backtraceBuffer.data(), backtraceSize);
+    auto* backtraceStrings = ::backtrace_symbols(backtraceBuffer.data(), backtraceSize);
     if (backtraceStrings == nullptr) {
-        LOG_ERR("Can't get backtrace symbols!");
+        printf("Can't get backtrace symbols!");
         return result;
     }
 
@@ -40,14 +38,15 @@ std::vector<std::string> GetBacktrace() {
 #if 1
         char* left_par = nullptr;
         char* plus = nullptr;
-        for (char* p = backtraceStrings[i]; *p; ++p) {
-            if (*p == '(')
+        for (char* p = backtraceStrings[i]; *p != '\0'; ++p) {
+            if (*p == '(') {
                 left_par = p;
-            else if (*p == '+')
+            } else if (*p == '+') {
                 plus = p;
+            }
         }
 
-        if (left_par && plus) {
+        if (left_par != nullptr && plus != nullptr) {
             *plus = '\0';
             int status = 0;
             char* realname = abi::__cxa_demangle(left_par + 1, nullptr, nullptr, &status);
@@ -69,17 +68,6 @@ std::vector<std::string> GetBacktrace() {
     }
     free(backtraceStrings);
     return result;
-}
-
-void PrintBacktrace() {
-    auto backtraces = GetBacktrace();
-    LOG_ERR("================================================================================");
-    LOG_ERR("============================== Start print backtrace ===========================");
-    for (const auto& line : backtraces) {
-        LOG_ERR(line.c_str());
-    }
-    LOG_ERR("=============================== End print backtrace  ===========================");
-    LOG_ERR("================================================================================");
 }
 
 }
